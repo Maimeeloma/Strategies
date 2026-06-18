@@ -2,5 +2,9 @@
     {
         "filename": "rsi_atr_scalp.py",
         "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/rsi_atr_scalp.py"
+    },
+    {
+        "filename": "ema_cross.py",
+        "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/ema_cross.py"
     }
 ]
