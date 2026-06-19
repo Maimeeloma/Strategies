@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-STRATEGY_NAME = "Simple-2-3"
+STRATEGY_NAME = "Simple-2-3-1"
 
 DEFAULT_CONFIG = {
     "atr_period": 9,
@@ -83,12 +83,12 @@ def run_backtest_optimization(candles, atr_period, lookback, rsi_period, balance
     low_vals = df['low'].values
     atr_vals = atr.values
     
-    rsi_ob_list = [60.0, 65.0, 70.0, 75.0, 80.0, 85.0, 90.0]
-    rsi_os_list = [10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0]
-    tp_mult_list = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 12.0, 15.0]
-    sl_mult_list = [1.0, 1.5, 2.0, 3.0, 5.0]
-    extreme_os_list = [10.0, 20.0, 30.0, 40.0]
-    extreme_ob_list = [60.0, 70.0, 80.0, 90.0]
+    rsi_ob_list = [10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0, 90.0, 100.0]
+    rsi_os_list = [10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0, 90.0, 100.0]
+    tp_mult_list = [1.0, 2.0, 3.0, 4.0, 5.0]
+    sl_mult_list = [1.0, 1.5,]
+    extreme_os_list = [10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0, 90.0, 100.0]
+    extreme_ob_list = [10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0, 90.0, 100.0]
     
     best_profit = -999999.0
     best_params = None
