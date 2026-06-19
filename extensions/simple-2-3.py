@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-STRATEGY_NAME = "RSI ATR SCALP"
+STRATEGY_NAME = "Simple-2-3"
 
 DEFAULT_CONFIG = {
     "atr_period": 9,
