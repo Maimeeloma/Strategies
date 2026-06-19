@@ -6,5 +6,9 @@
     {
         "filename": "ema_cross.py",
         "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/ema_cross.py"
+    },
+    {
+        "filename": "stoch_cross.py",
+        "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/stoch_cross.py"
     }
 ]

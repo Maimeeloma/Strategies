@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-STRATEGY_NAME = "Stoch-Cross-1D"
+STRATEGY_NAME = "Stoch-Cross"
 
 DEFAULT_CONFIG = {
     "atr_period": 9,
