@@ -437,7 +437,7 @@ def process_strategy(data, config, add_log_fn):
 
     updated_config = config.copy()
     bt_res = None
-    if True:
+    if trigger_backtest:
         bt_res = run_backtest_optimization(candles, atr_period, lookback, rsi_period, balance, tick_value, tick_size, min_lot, max_lot, lot_step)
         if bt_res:
             updated_config["rsi_overbought"] = bt_res["rsi_overbought"]
