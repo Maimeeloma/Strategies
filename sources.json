@@ -10,5 +10,13 @@
     {
         "filename": "stoch_cross.py",
         "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/stoch_cross.py"
+    },
+    {
+        "filename": "marday_v46.py",
+        "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/marday_v46.py"
+    },
+    {
+        "filename": "rsi_atr_scalp.py",
+        "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/rsi_atr_scalp.py.py"
     }
 ]
