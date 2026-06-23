@@ -207,9 +207,11 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
     last_time = df['time'].max()
     one_day_ago = last_time - 24 * 3600
     df_1d = df[df['time'] >= one_day_ago].reset_index(drop=True)
+    start_idx = df[df['time'] >= one_day_ago].index[0] if len(df[df['time'] >= one_day_ago]) > 0 else 0
     
     if len(df_1d) < 10:
         df_1d = df
+        start_idx = 0
         
     atr_period = int(config.get("atr_period", 9))
     lookback = int(config.get("lookback", 80))
@@ -222,8 +224,6 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
     atr = calculate_atr(df['high'], df['low'], df['close'], atr_period)
     norm_atr = calculate_normalized_atr(atr, lookback)
     rsi = calculate_rsi(df['close'], rsi_period)
-    
-    start_idx = df[df['time'] >= one_day_ago].index[0] if len(df[df['time'] >= one_day_ago]) > 0 else 0
     
     rsi_vals = rsi.values[start_idx:]
     norm_atr_vals = norm_atr.values[start_idx:]
