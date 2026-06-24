@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-STRATEGY_NAME = "Yum Hua Scalper Gold - 3"
+STRATEGY_NAME = "Yum Hua Trends Gold - 3"
 
 DEFAULT_CONFIG = {
     "atr_period": 9,
