@@ -22,5 +22,13 @@
     {
         "filename": "yum-hua-1.py",
         "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/yum-hua-1.py"
+    },
+    {
+        "filename": "rapid_fire_scalper.py",
+        "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/rapid_fire_scalper.py"
+    },
+    {
+        "filename": "teaser_scout.py",
+        "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/teaser_scout.py"
     }
 ]
