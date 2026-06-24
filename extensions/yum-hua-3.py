@@ -16,7 +16,8 @@ DEFAULT_CONFIG = {
     "use_center_exit": True,
     "use_opposite_channel_exit": True,
     "use_atr_spike_exit": True,
-    "auto_optimize_on_new_bar": True
+    "auto_optimize_on_new_bar": True,
+    "sideway_slope_threshold": 0.2
 }
 
 # ==========================================
@@ -128,6 +129,7 @@ def run_backtest_optimization(candles, atr_period, lookback, balance, tick_value
     use_center_exit = bool(config.get("use_center_exit", True))
     use_opp_exit = bool(config.get("use_opposite_channel_exit", True))
     use_atr_spike = bool(config.get("use_atr_spike_exit", True))
+    sideway_threshold = float(config.get("sideway_slope_threshold", 0.2))
     
     period_list = [30, 40, 50, 60, 80]
     dev_mult_list = [1.5, 1.8, 2.0, 2.2, 2.5]
@@ -234,8 +236,13 @@ def run_backtest_optimization(candles, atr_period, lookback, balance, tick_value
                                 pos_type = None
                         else:
                             if current_norm_atr < atr_threshold:
-                                buy_signal = (slope_curr > 0) and (low_price <= lower_curr)
-                                sell_signal = (slope_curr < 0) and (high_price >= upper_curr)
+                                is_sideway = abs(slope_curr) < sideway_threshold
+                                if is_sideway:
+                                    buy_signal = (low_price <= lower_curr)
+                                    sell_signal = (high_price >= upper_curr)
+                                else:
+                                    buy_signal = (slope_curr > 0) and (low_price <= lower_curr)
+                                    sell_signal = (slope_curr < 0) and (high_price >= upper_curr)
                                 
                                 if buy_signal:
                                     in_position = True
@@ -305,6 +312,7 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
     use_center_exit = bool(config.get("use_center_exit", True))
     use_opp_exit = bool(config.get("use_opposite_channel_exit", True))
     use_atr_spike = bool(config.get("use_atr_spike_exit", True))
+    sideway_threshold = float(config.get("sideway_slope_threshold", 0.2))
     
     atr = calculate_atr(df['high'], df['low'], df['close'], atr_period)
     norm_atr = calculate_normalized_atr(atr, lookback)
@@ -391,7 +399,8 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
                         in_position = False
                 else:
                     if current_norm_atr < atr_threshold:
-                        buy_signal = (slope_curr > 0) and (low_price <= lower_curr)
+                        is_sideway = abs(slope_curr) < sideway_threshold
+                        buy_signal = (low_price <= lower_curr) if is_sideway else ((slope_curr > 0) and (low_price <= lower_curr))
                         if buy_signal:
                             in_position = True
                             entry_price = close_price
@@ -481,7 +490,8 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
                         in_position = False
                 else:
                     if current_norm_atr < atr_threshold:
-                        sell_signal = (slope_curr < 0) and (high_price >= upper_curr)
+                        is_sideway = abs(slope_curr) < sideway_threshold
+                        sell_signal = (high_price >= upper_curr) if is_sideway else ((slope_curr < 0) and (high_price >= upper_curr))
                         if sell_signal:
                             in_position = True
                             entry_price = close_price
@@ -606,8 +616,15 @@ def process_strategy(data, config, add_log_fn):
     high_curr = df['high'].iloc[-2]
     low_curr = df['low'].iloc[-2]
     
-    buy_signal = (slope_curr > 0) and (low_curr <= lower_curr)
-    sell_signal = (slope_curr < 0) and (high_curr >= upper_curr)
+    sideway_threshold = float(updated_config.get("sideway_slope_threshold", 0.2))
+    is_sideway = abs(slope_curr) < sideway_threshold
+    
+    if is_sideway:
+        buy_signal = (low_curr <= lower_curr)
+        sell_signal = (high_curr >= upper_curr)
+    else:
+        buy_signal = (slope_curr > 0) and (low_curr <= lower_curr)
+        sell_signal = (slope_curr < 0) and (high_curr >= upper_curr)
     
     current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if is_new_bar:
@@ -619,6 +636,8 @@ def process_strategy(data, config, add_log_fn):
             signal_text = "SELL SIGNAL"
         elif buy_signal:
             signal_text = "BUY SIGNAL"
+        elif is_sideway:
+            signal_text = "SIDEWAY WAIT"
         elif slope_curr > 0:
             signal_text = "WAIT REBOUND BUY"
         elif slope_curr < 0:
@@ -701,24 +720,26 @@ def process_strategy(data, config, add_log_fn):
                 if sell_signal:
                     sl_dist = current_atr * cfg_sl_mult
                     lot_size = calculate_lot_size(balance, risk_percent, sl_dist, tick_value, tick_size, min_lot, max_lot, lot_step)
+                    reason_str = "Price touched Upper Channel (Flat Trend)" if is_sideway else "Price touched Upper Channel (Resistance) in Downtrend"
                     action_dict = {
                         "action": "SELL",
                         "atr": current_atr,
                         "tp_multiplier": cfg_tp_mult,
                         "sl_multiplier": cfg_sl_mult,
                         "lot": round(lot_size, 2),
-                        "reason": "Price touched Upper Channel (Resistance) in Downtrend"
+                        "reason": reason_str
                     }
                 elif buy_signal:
                     sl_dist = current_atr * cfg_sl_mult
                     lot_size = calculate_lot_size(balance, risk_percent, sl_dist, tick_value, tick_size, min_lot, max_lot, lot_step)
+                    reason_str = "Price touched Lower Channel (Flat Trend)" if is_sideway else "Price touched Lower Channel (Support) in Uptrend"
                     action_dict = {
                         "action": "BUY",
                         "atr": current_atr,
                         "tp_multiplier": cfg_tp_mult,
                         "sl_multiplier": cfg_sl_mult,
                         "lot": round(lot_size, 2),
-                        "reason": "Price touched Lower Channel (Support) in Uptrend"
+                        "reason": reason_str
                     }
 
     res_dict.update(action_dict)
