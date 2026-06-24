@@ -133,8 +133,8 @@ def run_backtest_optimization(candles, atr_period, lookback, rsi_period, balance
                                     profit_points = sl_level - entry_price
                                     profit_money = (profit_points / tick_size) * tick_value * lot_size
                                     hit = True
-                                elif use_scalp and (((high_vals[i-1] - entry_price) / tick_size) * tick_value * lot_size) >= min_prof:
-                                    profit_money = min_prof
+                                elif use_scalp and (((high_vals[i-1] - entry_price) / tick_size) * tick_value * lot_size) >= (lot_size / 0.01) * min_prof:
+                                    profit_money = (lot_size / 0.01) * min_prof
                                     hit = True
                                 elif high_vals[i-1] >= tp_level:
                                     profit_points = tp_level - entry_price
@@ -145,8 +145,8 @@ def run_backtest_optimization(candles, atr_period, lookback, rsi_period, balance
                                     profit_points = entry_price - sl_level
                                     profit_money = (profit_points / tick_size) * tick_value * lot_size
                                     hit = True
-                                elif use_scalp and (((entry_price - low_vals[i-1]) / tick_size) * tick_value * lot_size) >= min_prof:
-                                    profit_money = min_prof
+                                elif use_scalp and (((entry_price - low_vals[i-1]) / tick_size) * tick_value * lot_size) >= (lot_size / 0.01) * min_prof:
+                                    profit_money = (lot_size / 0.01) * min_prof
                                     hit = True
                                 elif low_vals[i-1] <= tp_level:
                                     profit_points = entry_price - tp_level
@@ -286,8 +286,8 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
                         profit_points = sl_level - entry_price
                         profit_money = (profit_points / tick_size) * tick_value * lot_size
                         hit = True
-                    elif use_scalp and (((high_vals[i-1] - entry_price) / tick_size) * tick_value * lot_size) >= min_prof:
-                        profit_money = min_prof
+                    elif use_scalp and (((high_vals[i-1] - entry_price) / tick_size) * tick_value * lot_size) >= (lot_size / 0.01) * min_prof:
+                        profit_money = (lot_size / 0.01) * min_prof
                         hit = True
                     elif high_vals[i-1] >= tp_level:
                         profit_points = tp_level - entry_price
@@ -361,8 +361,8 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
                         profit_points = entry_price - sl_level
                         profit_money = (profit_points / tick_size) * tick_value * lot_size
                         hit = True
-                    elif use_scalp and (((entry_price - low_vals[i-1]) / tick_size) * tick_value * lot_size) >= min_prof:
-                        profit_money = min_prof
+                    elif use_scalp and (((entry_price - low_vals[i-1]) / tick_size) * tick_value * lot_size) >= (lot_size / 0.01) * min_prof:
+                        profit_money = (lot_size / 0.01) * min_prof
                         hit = True
                     elif low_vals[i-1] <= tp_level:
                         profit_points = entry_price - tp_level
@@ -562,12 +562,14 @@ def process_strategy(data, config, add_log_fn):
             # 1. Tick-level Scalp Exit (Always checked on every tick)
             use_scalp = bool(updated_config.get("use_scalp_exit", True))
             min_prof = float(updated_config.get("min_profit_usd", 2.0))
+            volume = float(pos.get("volume", 0.01))
+            scaled_min_prof = (volume / 0.01) * min_prof
             
-            if use_scalp and profit >= min_prof:
+            if use_scalp and profit >= scaled_min_prof:
                 action_dict = {
                     "action": "CLOSE",
                     "ticket": ticket,
-                    "reason": f"Scalp profit reached: ${profit:.2f} (Target: ${min_prof:.2f})"
+                    "reason": f"Scalp profit reached: ${profit:.2f} (Target: ${scaled_min_prof:.2f})"
                 }
                 break
 
