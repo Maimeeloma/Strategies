@@ -38,5 +38,9 @@
     {
         "filename": "teaser_scout.py",
         "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/teaser_scout.py"
+    },
+    {
+        "filename": "yum-hua-3-1.py",
+        "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/yum-hua-3-1.py"
     }
 ]
