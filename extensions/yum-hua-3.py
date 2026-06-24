@@ -176,6 +176,8 @@ def run_backtest_optimization(candles, atr_period, lookback, balance, tick_value
                         lower_curr = lower_vals[i-1]
                         slope_curr = slope_vals[i-1]
                         
+                        is_sideway = abs(slope_curr) < sideway_threshold
+                        
                         if in_position:
                             hit = False
                             profit_money = 0.0
@@ -201,7 +203,7 @@ def run_backtest_optimization(candles, atr_period, lookback, balance, tick_value
                                     
                             if not hit:
                                 center_exit = False
-                                if use_center_exit:
+                                if use_center_exit and not is_sideway:
                                     if pos_type == "BUY" and close_price >= center_curr:
                                         center_exit = True
                                     elif pos_type == "SELL" and close_price <= center_curr:
@@ -236,7 +238,6 @@ def run_backtest_optimization(candles, atr_period, lookback, balance, tick_value
                                 pos_type = None
                         else:
                             if current_norm_atr < atr_threshold:
-                                is_sideway = abs(slope_curr) < sideway_threshold
                                 if is_sideway:
                                     buy_signal = (low_price <= lower_curr)
                                     sell_signal = (high_price >= upper_curr)
@@ -365,6 +366,8 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
                 lower_curr = lower_vals[i-1]
                 slope_curr = slope_vals[i-1]
                 
+                is_sideway = abs(slope_curr) < sideway_threshold
+                
                 if in_position:
                     hit = False
                     profit_money = 0.0
@@ -379,7 +382,7 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
                         hit = True
                         
                     if not hit:
-                        center_exit = use_center_exit and (close_price >= center_curr)
+                        center_exit = use_center_exit and not is_sideway and (close_price >= center_curr)
                         opp_channel_exit = use_opp_exit and (close_price >= upper_curr)
                         atr_spike_exit = use_atr_spike and (current_norm_atr >= atr_threshold * 1.5)
                         
@@ -399,7 +402,6 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
                         in_position = False
                 else:
                     if current_norm_atr < atr_threshold:
-                        is_sideway = abs(slope_curr) < sideway_threshold
                         buy_signal = (low_price <= lower_curr) if is_sideway else ((slope_curr > 0) and (low_price <= lower_curr))
                         if buy_signal:
                             in_position = True
@@ -456,6 +458,8 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
                 lower_curr = lower_vals[i-1]
                 slope_curr = slope_vals[i-1]
                 
+                is_sideway = abs(slope_curr) < sideway_threshold
+                
                 if in_position:
                     hit = False
                     profit_money = 0.0
@@ -470,7 +474,7 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
                         hit = True
                         
                     if not hit:
-                        center_exit = use_center_exit and (close_price <= center_curr)
+                        center_exit = use_center_exit and not is_sideway and (close_price <= center_curr)
                         opp_channel_exit = use_opp_exit and (close_price <= lower_curr)
                         atr_spike_exit = use_atr_spike and (current_norm_atr >= atr_threshold * 1.5)
                         
@@ -490,7 +494,6 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
                         in_position = False
                 else:
                     if current_norm_atr < atr_threshold:
-                        is_sideway = abs(slope_curr) < sideway_threshold
                         sell_signal = (high_price >= upper_curr) if is_sideway else ((slope_curr < 0) and (high_price >= upper_curr))
                         if sell_signal:
                             in_position = True
@@ -690,7 +693,7 @@ def process_strategy(data, config, add_log_fn):
             # 2. Standard/Indicator Exits (Only checked on new bar)
             if is_new_bar:
                 center_exit = False
-                if use_center_exit:
+                if use_center_exit and not is_sideway:
                     if pos_type == "BUY" and close_curr >= center_curr:
                         center_exit = True
                     elif pos_type == "SELL" and close_curr <= center_curr:
