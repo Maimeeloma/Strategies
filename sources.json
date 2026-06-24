@@ -18,5 +18,9 @@
     {
         "filename": "marday_v15.py",
         "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/marday_v15.py"
+    },
+    {
+        "filename": "yum-hua-1.py",
+        "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/yum-hua-1.py"
     }
 ]
