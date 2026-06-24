@@ -16,8 +16,6 @@ DEFAULT_CONFIG = {
     "use_center_exit": True,
     "use_opposite_channel_exit": True,
     "use_atr_spike_exit": True,
-    "use_scalp_exit": True,
-    "min_profit_usd": 2.0,
     "auto_optimize_on_new_bar": True
 }
 
@@ -125,8 +123,6 @@ def run_backtest_optimization(candles, atr_period, lookback, balance, tick_value
     low_vals = df['low'].values
     atr_vals = atr.values
     
-    use_scalp = bool(config.get("use_scalp_exit", True))
-    min_prof = float(config.get("min_profit_usd", 2.0))
     risk_percent = float(config.get("risk_percent", 5.0))
     atr_threshold = float(config.get("atr_threshold", 80.0))
     use_center_exit = bool(config.get("use_center_exit", True))
@@ -187,9 +183,6 @@ def run_backtest_optimization(candles, atr_period, lookback, balance, tick_value
                                     profit_points = sl_level - entry_price
                                     profit_money = (profit_points / tick_size) * tick_value * lot_size
                                     hit = True
-                                elif use_scalp and (((high_price - entry_price) / tick_size) * tick_value * lot_size) >= (lot_size / 0.01) * min_prof:
-                                    profit_money = (lot_size / 0.01) * min_prof
-                                    hit = True
                                 elif high_price >= tp_level:
                                     profit_points = tp_level - entry_price
                                     profit_money = (profit_points / tick_size) * tick_value * lot_size
@@ -198,9 +191,6 @@ def run_backtest_optimization(candles, atr_period, lookback, balance, tick_value
                                 if high_price >= sl_level:
                                     profit_points = entry_price - sl_level
                                     profit_money = (profit_points / tick_size) * tick_value * lot_size
-                                    hit = True
-                                elif use_scalp and (((entry_price - low_price) / tick_size) * tick_value * lot_size) >= (lot_size / 0.01) * min_prof:
-                                    profit_money = (lot_size / 0.01) * min_prof
                                     hit = True
                                 elif low_price <= tp_level:
                                     profit_points = entry_price - tp_level
@@ -312,8 +302,6 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
     atr_threshold = float(config.get("atr_threshold", 80.0))
     risk_percent = float(config.get("risk_percent", 5.0))
     
-    use_scalp = bool(config.get("use_scalp_exit", True))
-    min_prof = float(config.get("min_profit_usd", 2.0))
     use_center_exit = bool(config.get("use_center_exit", True))
     use_opp_exit = bool(config.get("use_opposite_channel_exit", True))
     use_atr_spike = bool(config.get("use_atr_spike_exit", True))
@@ -376,9 +364,6 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
                     if low_price <= sl_level:
                         profit_points = sl_level - entry_price
                         profit_money = (profit_points / tick_size) * tick_value * lot_size
-                        hit = True
-                    elif use_scalp and (((high_price - entry_price) / tick_size) * tick_value * lot_size) >= (lot_size / 0.01) * min_prof:
-                        profit_money = (lot_size / 0.01) * min_prof
                         hit = True
                     elif high_price >= tp_level:
                         profit_points = tp_level - entry_price
@@ -469,9 +454,6 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
                     if high_price >= sl_level:
                         profit_points = entry_price - sl_level
                         profit_money = (profit_points / tick_size) * tick_value * lot_size
-                        hit = True
-                    elif use_scalp and (((entry_price - low_price) / tick_size) * tick_value * lot_size) >= (lot_size / 0.01) * min_prof:
-                        profit_money = (lot_size / 0.01) * min_prof
                         hit = True
                     elif low_price <= tp_level:
                         profit_points = entry_price - tp_level
@@ -685,20 +667,6 @@ def process_strategy(data, config, add_log_fn):
             ticket = pos.get("ticket")
             pos_type = pos.get("type")
             profit = float(pos.get("profit", 0.0))
-
-            # 1. Tick-level Scalp Exit (Always checked on every tick)
-            use_scalp = bool(updated_config.get("use_scalp_exit", True))
-            min_prof = float(updated_config.get("min_profit_usd", 2.0))
-            volume = float(pos.get("volume", 0.01))
-            scaled_min_prof = (volume / 0.01) * min_prof
-            
-            if use_scalp and profit >= scaled_min_prof:
-                action_dict = {
-                    "action": "CLOSE",
-                    "ticket": ticket,
-                    "reason": f"Scalp profit reached: ${profit:.2f} (Target: ${scaled_min_prof:.2f})"
-                }
-                break
 
             # 2. Standard/Indicator Exits (Only checked on new bar)
             if is_new_bar:
