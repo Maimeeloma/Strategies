@@ -17,7 +17,7 @@ DEFAULT_CONFIG = {
     "use_opposite_channel_exit": True,
     "use_atr_spike_exit": True,
     "auto_optimize_on_new_bar": True,
-    "sideway_slope_threshold": 0.2
+    "sideway_slope_threshold": 0.05
 }
 
 # ==========================================
@@ -122,6 +122,7 @@ def run_backtest_optimization(candles, atr_period, lookback, balance, tick_value
     close_vals = df['close'].values
     high_vals = df['high'].values
     low_vals = df['low'].values
+    open_vals = df['open'].values
     atr_vals = atr.values
     
     risk_percent = float(config.get("risk_percent", 5.0))
@@ -238,6 +239,9 @@ def run_backtest_optimization(candles, atr_period, lookback, balance, tick_value
                                 pos_type = None
                         else:
                             if current_norm_atr < atr_threshold:
+                                is_falling_knife = (close_price < open_vals[i-1]) and (close_vals[i-2] < open_vals[i-2]) and (close_vals[i-3] < open_vals[i-3])
+                                is_rising_rocket = (close_price > open_vals[i-1]) and (close_vals[i-2] > open_vals[i-2]) and (close_vals[i-3] > open_vals[i-3])
+                                
                                 if is_sideway:
                                     buy_signal = (low_price <= lower_curr)
                                     sell_signal = (high_price >= upper_curr)
@@ -245,7 +249,7 @@ def run_backtest_optimization(candles, atr_period, lookback, balance, tick_value
                                     buy_signal = (slope_curr > 0) and (low_price <= lower_curr)
                                     sell_signal = (slope_curr < 0) and (high_price >= upper_curr)
                                 
-                                if buy_signal:
+                                if buy_signal and not is_falling_knife:
                                     in_position = True
                                     pos_type = "BUY"
                                     entry_price = close_price
@@ -254,7 +258,7 @@ def run_backtest_optimization(candles, atr_period, lookback, balance, tick_value
                                     lot_size = calculate_lot_size(sim_balance, risk_percent, sl_dist, tick_value, tick_size, min_lot, max_lot, lot_step)
                                     sl_level = entry_price - sl_dist
                                     tp_level = entry_price + (atr_val * tp_m)
-                                elif sell_signal:
+                                elif sell_signal and not is_rising_rocket:
                                     in_position = True
                                     pos_type = "SELL"
                                     entry_price = close_price
@@ -323,6 +327,7 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
     close_vals = df['close'].values[start_idx:]
     high_vals = df['high'].values[start_idx:]
     low_vals = df['low'].values[start_idx:]
+    open_vals = df['open'].values[start_idx:]
     atr_vals = atr.values[start_idx:]
     
     center_vals = center.values[start_idx:]
@@ -352,7 +357,7 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
             tp_level = 0.0
             lot_size = min_lot
             
-            for i in range(2, len(df_1d)):
+            for i in range(3, len(df_1d)):
                 if np.isnan(center_vals[i-1]):
                     continue
                     
@@ -402,8 +407,9 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
                         in_position = False
                 else:
                     if current_norm_atr < atr_threshold:
+                        is_falling_knife = (close_price < open_vals[i-1]) and (close_vals[i-2] < open_vals[i-2]) and (close_vals[i-3] < open_vals[i-3])
                         buy_signal = (low_price <= lower_curr) if is_sideway else ((slope_curr > 0) and (low_price <= lower_curr))
-                        if buy_signal:
+                        if buy_signal and not is_falling_knife:
                             in_position = True
                             entry_price = close_price
                             atr_val = atr_vals[i-1]
@@ -444,7 +450,7 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
             tp_level = 0.0
             lot_size = min_lot
             
-            for i in range(2, len(df_1d)):
+            for i in range(3, len(df_1d)):
                 if np.isnan(center_vals[i-1]):
                     continue
                     
@@ -494,8 +500,9 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
                         in_position = False
                 else:
                     if current_norm_atr < atr_threshold:
+                        is_rising_rocket = (close_price > open_vals[i-1]) and (close_vals[i-2] > open_vals[i-2]) and (close_vals[i-3] > open_vals[i-3])
                         sell_signal = (high_price >= upper_curr) if is_sideway else ((slope_curr < 0) and (high_price >= upper_curr))
-                        if sell_signal:
+                        if sell_signal and not is_rising_rocket:
                             in_position = True
                             entry_price = close_price
                             atr_val = atr_vals[i-1]
@@ -618,9 +625,13 @@ def process_strategy(data, config, add_log_fn):
     close_curr = df['close'].iloc[-2]
     high_curr = df['high'].iloc[-2]
     low_curr = df['low'].iloc[-2]
+    open_curr = df['open'].iloc[-2]
     
-    sideway_threshold = float(updated_config.get("sideway_slope_threshold", 0.2))
+    sideway_threshold = float(updated_config.get("sideway_slope_threshold", 0.05))
     is_sideway = abs(slope_curr) < sideway_threshold
+    
+    is_falling_knife = (close_curr < open_curr) and (df['close'].iloc[-3] < df['open'].iloc[-3]) and (df['close'].iloc[-4] < df['open'].iloc[-4])
+    is_rising_rocket = (close_curr > open_curr) and (df['close'].iloc[-3] > df['open'].iloc[-3]) and (df['close'].iloc[-4] > df['open'].iloc[-4])
     
     if is_sideway:
         buy_signal = (low_curr <= lower_curr)
@@ -636,9 +647,15 @@ def process_strategy(data, config, add_log_fn):
     signal_text = "NONE"
     if current_norm_atr < atr_threshold:
         if sell_signal:
-            signal_text = "SELL SIGNAL"
+            if is_rising_rocket:
+                signal_text = "BLOCK RISING ROCKET"
+            else:
+                signal_text = "SELL SIGNAL"
         elif buy_signal:
-            signal_text = "BUY SIGNAL"
+            if is_falling_knife:
+                signal_text = "BLOCK FALLING KNIFE"
+            else:
+                signal_text = "BUY SIGNAL"
         elif is_sideway:
             signal_text = "SIDEWAY WAIT"
         elif slope_curr > 0:
@@ -720,7 +737,7 @@ def process_strategy(data, config, add_log_fn):
         # 3. Entries: Checked ONLY on new bar
         if is_new_bar:
             if current_norm_atr < atr_threshold:
-                if sell_signal:
+                if sell_signal and not is_rising_rocket:
                     sl_dist = current_atr * cfg_sl_mult
                     lot_size = calculate_lot_size(balance, risk_percent, sl_dist, tick_value, tick_size, min_lot, max_lot, lot_step)
                     reason_str = "Price touched Upper Channel (Flat Trend)" if is_sideway else "Price touched Upper Channel (Resistance) in Downtrend"
@@ -732,7 +749,7 @@ def process_strategy(data, config, add_log_fn):
                         "lot": round(lot_size, 2),
                         "reason": reason_str
                     }
-                elif buy_signal:
+                elif buy_signal and not is_falling_knife:
                     sl_dist = current_atr * cfg_sl_mult
                     lot_size = calculate_lot_size(balance, risk_percent, sl_dist, tick_value, tick_size, min_lot, max_lot, lot_step)
                     reason_str = "Price touched Lower Channel (Flat Trend)" if is_sideway else "Price touched Lower Channel (Support) in Uptrend"
