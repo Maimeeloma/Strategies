@@ -2,24 +2,20 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-STRATEGY_NAME = "Yum Hua Scalper Gold - 2"
+STRATEGY_NAME = "Yum Hua Scalper Gold - 3"
 
 DEFAULT_CONFIG = {
     "atr_period": 9,
     "lookback": 80,
-    "rsi_period": 7,
-    "rsi_overbought": 70.0,
-    "rsi_oversold": 30.0,
-    "extreme_overbought": 85.0,
-    "extreme_oversold": 15.0,
+    "regression_period": 50,
+    "channel_dev_multiplier": 2.0,
     "tp_multiplier": 1.0,
     "sl_multiplier": 2.0,
     "risk_percent": 5.0,
     "atr_threshold": 80.0,
-    "use_rsi_neutral_exit": True,
-    "rsi_neutral": 50.0,
+    "use_center_exit": True,
+    "use_opposite_channel_exit": True,
     "use_atr_spike_exit": True,
-    "use_extreme_rsi_exit": True,
     "use_scalp_exit": True,
     "min_profit_usd": 2.0,
     "auto_optimize_on_new_bar": True
@@ -53,6 +49,51 @@ def calculate_normalized_atr(atr_series, lookback=80):
     norm_atr = np.where(range_diff == 0, 0.0, ((atr_series - rolling_min) / range_diff) * 100.0)
     return pd.Series(norm_atr, index=atr_series.index)
 
+def calculate_regression_channel(close_series, period=50, multiplier=2.0):
+    close_vals = close_series.values
+    size = len(close_vals)
+    center = np.full(size, np.nan)
+    upper = np.full(size, np.nan)
+    lower = np.full(size, np.nan)
+    slope = np.full(size, np.nan)
+    
+    if size < period:
+        return (pd.Series(center, index=close_series.index), 
+                pd.Series(upper, index=close_series.index), 
+                pd.Series(lower, index=close_series.index), 
+                pd.Series(slope, index=close_series.index))
+        
+    x = np.arange(period)
+    x_sum = x.sum()
+    x2_sum = (x**2).sum()
+    denominator = period * x2_sum - x_sum**2
+    
+    shape = (size - period + 1, period)
+    strides = (close_vals.strides[0], close_vals.strides[0])
+    windows = np.lib.stride_tricks.as_strided(close_vals, shape=shape, strides=strides)
+    
+    sum_y = np.sum(windows, axis=1)
+    sum_xy = np.sum(x * windows, axis=1)
+    
+    m = (period * sum_xy - x_sum * sum_y) / denominator
+    c = (sum_y - m * x_sum) / period
+    
+    reg_val = m * (period - 1) + c
+    
+    expected = m[:, None] * x + c[:, None]
+    errors = windows - expected
+    std_dev = np.sqrt(np.mean(errors**2, axis=1))
+    
+    center[period-1:] = reg_val
+    upper[period-1:] = reg_val + multiplier * std_dev
+    lower[period-1:] = reg_val - multiplier * std_dev
+    slope[period-1:] = m
+    
+    return (pd.Series(center, index=close_series.index), 
+            pd.Series(upper, index=close_series.index), 
+            pd.Series(lower, index=close_series.index), 
+            pd.Series(slope, index=close_series.index))
+
 def calculate_lot_size(balance, risk_percent, sl_dist, tick_value, tick_size, min_lot, max_lot, lot_step):
     if tick_value <= 0 or tick_size <= 0 or sl_dist <= 0:
         return min_lot
@@ -66,8 +107,8 @@ def calculate_lot_size(balance, risk_percent, sl_dist, tick_value, tick_size, mi
 # ==========================================
 # Grid Search Backtest Optimization
 # ==========================================
-def run_backtest_optimization(candles, atr_period, lookback, rsi_period, balance, tick_value, tick_size, min_lot, max_lot, lot_step, config):
-    if len(candles) < lookback + 5:
+def run_backtest_optimization(candles, atr_period, lookback, balance, tick_value, tick_size, min_lot, max_lot, lot_step, config):
+    if len(candles) < lookback + 10:
         return None
         
     df = pd.DataFrame(candles)
@@ -77,9 +118,7 @@ def run_backtest_optimization(candles, atr_period, lookback, rsi_period, balance
     # Calculate indicators
     atr = calculate_atr(df['high'], df['low'], df['close'], atr_period)
     norm_atr = calculate_normalized_atr(atr, lookback)
-    rsi = calculate_rsi(df['close'], rsi_period)
     
-    rsi_vals = rsi.values
     norm_atr_vals = norm_atr.values
     close_vals = df['close'].values
     high_vals = df['high'].values
@@ -90,26 +129,31 @@ def run_backtest_optimization(candles, atr_period, lookback, rsi_period, balance
     min_prof = float(config.get("min_profit_usd", 2.0))
     risk_percent = float(config.get("risk_percent", 5.0))
     atr_threshold = float(config.get("atr_threshold", 80.0))
-    use_rsi_neutral = bool(config.get("use_rsi_neutral_exit", False))
-    rsi_neutral = float(config.get("rsi_neutral", 50.0))
+    use_center_exit = bool(config.get("use_center_exit", True))
+    use_opp_exit = bool(config.get("use_opposite_channel_exit", True))
     use_atr_spike = bool(config.get("use_atr_spike_exit", True))
-    use_extreme_rsi = bool(config.get("use_extreme_rsi_exit", True))
     
-    rsi_ob_list = [60.0, 65.0, 70.0, 75.0, 80.0]
-    rsi_os_list = [20.0, 25.0, 30.0, 35.0, 40.0]
+    period_list = [30, 40, 50, 60, 80]
+    dev_mult_list = [1.5, 1.8, 2.0, 2.2, 2.5]
     tp_mult_list = [0.5, 1.0, 1.5, 2.0, 3.0]
     sl_mult_list = [1.0, 1.5, 2.0, 2.5]
     
     best_profit = -999999.0
     best_params = None
     
-    for ob in rsi_ob_list:
-        for os in rsi_os_list:
+    # Precalculate channels to speed up optimization loop
+    channels_cache = {}
+    for period in period_list:
+        for dev_mult in dev_mult_list:
+            center, upper, lower, slope = calculate_regression_channel(df['close'], period, dev_mult)
+            channels_cache[(period, dev_mult)] = (center.values, upper.values, lower.values, slope.values)
+            
+    for period in period_list:
+        for dev_mult in dev_mult_list:
+            center_vals, upper_vals, lower_vals, slope_vals = channels_cache[(period, dev_mult)]
+            
             for tp_m in tp_mult_list:
                 for sl_m in sl_mult_list:
-                    ex_os = os - 10.0 if os > 10.0 else 5.0
-                    ex_ob = ob + 10.0 if ob < 90.0 else 95.0
-                    
                     sim_balance = balance
                     peak_balance = balance
                     max_dd = 0.0
@@ -123,68 +167,64 @@ def run_backtest_optimization(candles, atr_period, lookback, rsi_period, balance
                     tp_level = 0.0
                     lot_size = min_lot
                     
-                    for i in range(2, len(df)):
-                        rsi_curr = rsi_vals[i-1]
-                        rsi_prev = rsi_vals[i-2]
+                    for i in range(period + 1, len(df)):
                         current_norm_atr = norm_atr_vals[i-1]
                         close_price = close_vals[i-1]
+                        high_price = high_vals[i-1]
+                        low_price = low_vals[i-1]
+                        
+                        center_curr = center_vals[i-1]
+                        upper_curr = upper_vals[i-1]
+                        lower_curr = lower_vals[i-1]
+                        slope_curr = slope_vals[i-1]
                         
                         if in_position:
                             hit = False
                             profit_money = 0.0
                             
                             if pos_type == "BUY":
-                                if low_vals[i-1] <= sl_level:
+                                if low_price <= sl_level:
                                     profit_points = sl_level - entry_price
                                     profit_money = (profit_points / tick_size) * tick_value * lot_size
                                     hit = True
-                                elif use_scalp and (((high_vals[i-1] - entry_price) / tick_size) * tick_value * lot_size) >= (lot_size / 0.01) * min_prof:
+                                elif use_scalp and (((high_price - entry_price) / tick_size) * tick_value * lot_size) >= (lot_size / 0.01) * min_prof:
                                     profit_money = (lot_size / 0.01) * min_prof
                                     hit = True
-                                elif high_vals[i-1] >= tp_level:
+                                elif high_price >= tp_level:
                                     profit_points = tp_level - entry_price
                                     profit_money = (profit_points / tick_size) * tick_value * lot_size
                                     hit = True
                             elif pos_type == "SELL":
-                                if high_vals[i-1] >= sl_level:
+                                if high_price >= sl_level:
                                     profit_points = entry_price - sl_level
                                     profit_money = (profit_points / tick_size) * tick_value * lot_size
                                     hit = True
-                                elif use_scalp and (((entry_price - low_vals[i-1]) / tick_size) * tick_value * lot_size) >= (lot_size / 0.01) * min_prof:
+                                elif use_scalp and (((entry_price - low_price) / tick_size) * tick_value * lot_size) >= (lot_size / 0.01) * min_prof:
                                     profit_money = (lot_size / 0.01) * min_prof
                                     hit = True
-                                elif low_vals[i-1] <= tp_level:
+                                elif low_price <= tp_level:
                                     profit_points = entry_price - tp_level
                                     profit_money = (profit_points / tick_size) * tick_value * lot_size
                                     hit = True
                                     
                             if not hit:
-                                # 1. RSI Neutral Exit
-                                rsi_neutral_trigger = False
-                                if use_rsi_neutral:
-                                    if pos_type == "BUY" and rsi_curr > rsi_neutral:
-                                        rsi_neutral_trigger = True
-                                    elif pos_type == "SELL" and rsi_curr < rsi_neutral:
-                                        rsi_neutral_trigger = True
+                                center_exit = False
+                                if use_center_exit:
+                                    if pos_type == "BUY" and close_price >= center_curr:
+                                        center_exit = True
+                                    elif pos_type == "SELL" and close_price <= center_curr:
+                                        center_exit = True
+                                        
+                                opp_channel_exit = False
+                                if use_opp_exit:
+                                    if pos_type == "BUY" and close_price >= upper_curr:
+                                        opp_channel_exit = True
+                                    elif pos_type == "SELL" and close_price <= lower_curr:
+                                        opp_channel_exit = True
+                                        
+                                atr_spike_exit = use_atr_spike and (current_norm_atr >= atr_threshold * 1.5)
                                 
-                                # 2. ATR Spike Exit
-                                atr_spike_trigger = use_atr_spike and (current_norm_atr >= atr_threshold * 1.5)
-                                
-                                # 3. Extreme RSI Exit
-                                extreme_exit_trigger = False
-                                if use_extreme_rsi:
-                                    if pos_type == "BUY":
-                                        profit_points = close_price - entry_price
-                                        cross_down_ex_ob = (rsi_prev > ex_ob and rsi_curr < ex_ob)
-                                        if cross_down_ex_ob and profit_points > 0:
-                                            extreme_exit_trigger = True
-                                    elif pos_type == "SELL":
-                                        profit_points = entry_price - close_price
-                                        cross_up_ex_os = (rsi_prev < ex_os and rsi_curr > ex_os)
-                                        if cross_up_ex_os and profit_points > 0:
-                                            extreme_exit_trigger = True
-                                            
-                                if rsi_neutral_trigger or atr_spike_trigger or extreme_exit_trigger:
+                                if center_exit or opp_channel_exit or atr_spike_exit:
                                     if pos_type == "BUY":
                                         profit_points = close_price - entry_price
                                     else:
@@ -204,19 +244,10 @@ def run_backtest_optimization(candles, atr_period, lookback, rsi_period, balance
                                 pos_type = None
                         else:
                             if current_norm_atr < atr_threshold:
-                                cross_ob = (rsi_prev >= ob and rsi_curr < ob)
-                                cross_os = (rsi_prev <= os and rsi_curr > os)
+                                buy_signal = (slope_curr > 0) and (low_price <= lower_curr)
+                                sell_signal = (slope_curr < 0) and (high_price >= upper_curr)
                                 
-                                if cross_ob:
-                                    in_position = True
-                                    pos_type = "SELL"
-                                    entry_price = close_price
-                                    atr_val = atr_vals[i-1]
-                                    sl_dist = atr_val * sl_m
-                                    lot_size = calculate_lot_size(sim_balance, risk_percent, sl_dist, tick_value, tick_size, min_lot, max_lot, lot_step)
-                                    sl_level = entry_price + sl_dist
-                                    tp_level = entry_price - (atr_val * tp_m)
-                                elif cross_os:
+                                if buy_signal:
                                     in_position = True
                                     pos_type = "BUY"
                                     entry_price = close_price
@@ -225,6 +256,15 @@ def run_backtest_optimization(candles, atr_period, lookback, rsi_period, balance
                                     lot_size = calculate_lot_size(sim_balance, risk_percent, sl_dist, tick_value, tick_size, min_lot, max_lot, lot_step)
                                     sl_level = entry_price - sl_dist
                                     tp_level = entry_price + (atr_val * tp_m)
+                                elif sell_signal:
+                                    in_position = True
+                                    pos_type = "SELL"
+                                    entry_price = close_price
+                                    atr_val = atr_vals[i-1]
+                                    sl_dist = atr_val * sl_m
+                                    lot_size = calculate_lot_size(sim_balance, risk_percent, sl_dist, tick_value, tick_size, min_lot, max_lot, lot_step)
+                                    sl_level = entry_price + sl_dist
+                                    tp_level = entry_price - (atr_val * tp_m)
                                     
                     net_profit = sim_balance - balance
                     win_rate = (winning_trades / trades_count * 100) if trades_count > 0 else 0.0
@@ -233,12 +273,10 @@ def run_backtest_optimization(candles, atr_period, lookback, rsi_period, balance
                         if net_profit > best_profit:
                             best_profit = net_profit
                             best_params = {
-                                "rsi_overbought": ob,
-                                "rsi_oversold": os,
+                                "regression_period": period,
+                                "channel_dev_multiplier": dev_mult,
                                 "tp_multiplier": tp_m,
                                 "sl_multiplier": sl_m,
-                                "extreme_oversold": ex_os,
-                                "extreme_overbought": ex_ob,
                                 "win_rate": win_rate,
                                 "max_drawdown": max_dd,
                                 "trades_count": trades_count,
@@ -269,31 +307,31 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
         
     atr_period = int(config.get("atr_period", 9))
     lookback = int(config.get("lookback", 80))
-    rsi_period = int(config.get("rsi_period", 7))
+    regression_period = int(config.get("regression_period", 50))
+    dev_mult = float(config.get("channel_dev_multiplier", 2.0))
     atr_threshold = float(config.get("atr_threshold", 80.0))
     risk_percent = float(config.get("risk_percent", 5.0))
-    rsi_os = float(config.get("rsi_oversold", 30.0))
-    rsi_ob = float(config.get("rsi_overbought", 70.0))
     
     use_scalp = bool(config.get("use_scalp_exit", True))
     min_prof = float(config.get("min_profit_usd", 2.0))
-    use_rsi_neutral = bool(config.get("use_rsi_neutral_exit", False))
-    rsi_neutral = float(config.get("rsi_neutral", 50.0))
+    use_center_exit = bool(config.get("use_center_exit", True))
+    use_opp_exit = bool(config.get("use_opposite_channel_exit", True))
     use_atr_spike = bool(config.get("use_atr_spike_exit", True))
-    use_extreme_rsi = bool(config.get("use_extreme_rsi_exit", True))
-    cfg_ex_os = float(config.get("extreme_oversold", 15.0))
-    cfg_ex_ob = float(config.get("extreme_overbought", 85.0))
     
     atr = calculate_atr(df['high'], df['low'], df['close'], atr_period)
     norm_atr = calculate_normalized_atr(atr, lookback)
-    rsi = calculate_rsi(df['close'], rsi_period)
+    center, upper, lower, slope = calculate_regression_channel(df['close'], regression_period, dev_mult)
     
-    rsi_vals = rsi.values[start_idx:]
     norm_atr_vals = norm_atr.values[start_idx:]
     close_vals = df['close'].values[start_idx:]
     high_vals = df['high'].values[start_idx:]
     low_vals = df['low'].values[start_idx:]
     atr_vals = atr.values[start_idx:]
+    
+    center_vals = center.values[start_idx:]
+    upper_vals = upper.values[start_idx:]
+    lower_vals = lower.values[start_idx:]
+    slope_vals = slope.values[start_idx:]
     
     tp_list = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
     sl_list = [1.0, 1.5, 2.0, 2.5]
@@ -318,43 +356,41 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
             lot_size = min_lot
             
             for i in range(2, len(df_1d)):
-                rsi_curr = rsi_vals[i-1]
-                rsi_prev = rsi_vals[i-2]
+                if np.isnan(center_vals[i-1]):
+                    continue
+                    
                 current_norm_atr = norm_atr_vals[i-1]
                 close_price = close_vals[i-1]
+                high_price = high_vals[i-1]
+                low_price = low_vals[i-1]
+                
+                center_curr = center_vals[i-1]
+                upper_curr = upper_vals[i-1]
+                lower_curr = lower_vals[i-1]
+                slope_curr = slope_vals[i-1]
                 
                 if in_position:
                     hit = False
                     profit_money = 0.0
                     
-                    if low_vals[i-1] <= sl_level:
+                    if low_price <= sl_level:
                         profit_points = sl_level - entry_price
                         profit_money = (profit_points / tick_size) * tick_value * lot_size
                         hit = True
-                    elif use_scalp and (((high_vals[i-1] - entry_price) / tick_size) * tick_value * lot_size) >= (lot_size / 0.01) * min_prof:
+                    elif use_scalp and (((high_price - entry_price) / tick_size) * tick_value * lot_size) >= (lot_size / 0.01) * min_prof:
                         profit_money = (lot_size / 0.01) * min_prof
                         hit = True
-                    elif high_vals[i-1] >= tp_level:
+                    elif high_price >= tp_level:
                         profit_points = tp_level - entry_price
                         profit_money = (profit_points / tick_size) * tick_value * lot_size
                         hit = True
                         
                     if not hit:
-                        # 1. RSI Neutral Exit
-                        rsi_neutral_trigger = use_rsi_neutral and rsi_curr > rsi_neutral
+                        center_exit = use_center_exit and (close_price >= center_curr)
+                        opp_channel_exit = use_opp_exit and (close_price >= upper_curr)
+                        atr_spike_exit = use_atr_spike and (current_norm_atr >= atr_threshold * 1.5)
                         
-                        # 2. ATR Spike Exit
-                        atr_spike_trigger = use_atr_spike and (current_norm_atr >= atr_threshold * 1.5)
-                        
-                        # 3. Extreme RSI Exit
-                        extreme_exit_trigger = False
-                        if use_extreme_rsi:
-                            profit_points = close_price - entry_price
-                            cross_down_ex_ob = (rsi_prev > cfg_ex_ob and rsi_curr < cfg_ex_ob)
-                            if cross_down_ex_ob and profit_points > 0:
-                                extreme_exit_trigger = True
-                                
-                        if rsi_neutral_trigger or atr_spike_trigger or extreme_exit_trigger:
+                        if center_exit or opp_channel_exit or atr_spike_exit:
                             profit_points = close_price - entry_price
                             profit_money = (profit_points / tick_size) * tick_value * lot_size
                             hit = True
@@ -370,8 +406,8 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
                         in_position = False
                 else:
                     if current_norm_atr < atr_threshold:
-                        cross_os = (rsi_prev <= rsi_os and rsi_curr > rsi_os)
-                        if cross_os:
+                        buy_signal = (slope_curr > 0) and (low_price <= lower_curr)
+                        if buy_signal:
                             in_position = True
                             entry_price = close_price
                             atr_val = atr_vals[i-1]
@@ -413,43 +449,41 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
             lot_size = min_lot
             
             for i in range(2, len(df_1d)):
-                rsi_curr = rsi_vals[i-1]
-                rsi_prev = rsi_vals[i-2]
+                if np.isnan(center_vals[i-1]):
+                    continue
+                    
                 current_norm_atr = norm_atr_vals[i-1]
                 close_price = close_vals[i-1]
+                high_price = high_vals[i-1]
+                low_price = low_vals[i-1]
+                
+                center_curr = center_vals[i-1]
+                upper_curr = upper_vals[i-1]
+                lower_curr = lower_vals[i-1]
+                slope_curr = slope_vals[i-1]
                 
                 if in_position:
                     hit = False
                     profit_money = 0.0
                     
-                    if high_vals[i-1] >= sl_level:
+                    if high_price >= sl_level:
                         profit_points = entry_price - sl_level
                         profit_money = (profit_points / tick_size) * tick_value * lot_size
                         hit = True
-                    elif use_scalp and (((entry_price - low_vals[i-1]) / tick_size) * tick_value * lot_size) >= (lot_size / 0.01) * min_prof:
+                    elif use_scalp and (((entry_price - low_price) / tick_size) * tick_value * lot_size) >= (lot_size / 0.01) * min_prof:
                         profit_money = (lot_size / 0.01) * min_prof
                         hit = True
-                    elif low_vals[i-1] <= tp_level:
+                    elif low_price <= tp_level:
                         profit_points = entry_price - tp_level
                         profit_money = (profit_points / tick_size) * tick_value * lot_size
                         hit = True
                         
                     if not hit:
-                        # 1. RSI Neutral Exit
-                        rsi_neutral_trigger = use_rsi_neutral and rsi_curr < rsi_neutral
+                        center_exit = use_center_exit and (close_price <= center_curr)
+                        opp_channel_exit = use_opp_exit and (close_price <= lower_curr)
+                        atr_spike_exit = use_atr_spike and (current_norm_atr >= atr_threshold * 1.5)
                         
-                        # 2. ATR Spike Exit
-                        atr_spike_trigger = use_atr_spike and (current_norm_atr >= atr_threshold * 1.5)
-                        
-                        # 3. Extreme RSI Exit
-                        extreme_exit_trigger = False
-                        if use_extreme_rsi:
-                            profit_points = entry_price - close_price
-                            cross_up_ex_os = (rsi_prev < cfg_ex_os and rsi_curr > cfg_ex_os)
-                            if cross_up_ex_os and profit_points > 0:
-                                extreme_exit_trigger = True
-                                
-                        if rsi_neutral_trigger or atr_spike_trigger or extreme_exit_trigger:
+                        if center_exit or opp_channel_exit or atr_spike_exit:
                             profit_points = entry_price - close_price
                             profit_money = (profit_points / tick_size) * tick_value * lot_size
                             hit = True
@@ -465,8 +499,8 @@ def run_manual_scalp_backtest(candles, balance, tick_value, tick_size, min_lot, 
                         in_position = False
                 else:
                     if current_norm_atr < atr_threshold:
-                        cross_ob = (rsi_prev >= rsi_ob and rsi_curr < rsi_ob)
-                        if cross_ob:
+                        sell_signal = (slope_curr < 0) and (high_price >= upper_curr)
+                        if sell_signal:
                             in_position = True
                             entry_price = close_price
                             atr_val = atr_vals[i-1]
@@ -534,7 +568,6 @@ def process_strategy(data, config, add_log_fn):
     
     atr_period = int(updated_config.get("atr_period", 9))
     lookback = int(updated_config.get("lookback", 80))
-    rsi_period = int(updated_config.get("rsi_period", 7))
     atr_threshold = float(updated_config.get("atr_threshold", 80.0))
     risk_percent = float(updated_config.get("risk_percent", 5.0))
     
@@ -545,20 +578,18 @@ def process_strategy(data, config, add_log_fn):
     max_lot = float(data.get("max_lot", 100.0))
     lot_step = float(data.get("lot_step", 0.01))
     
-    if len(candles) < lookback + 5:
-        return {"action": "NONE", "message": f"Insufficient bars: {len(candles)}/{lookback + 5}"}, config, {}, None
+    if len(candles) < lookback + 10:
+        return {"action": "NONE", "message": f"Insufficient bars: {len(candles)}/{lookback + 10}"}, config, {}, None
 
     bt_res = None
     auto_opt = bool(updated_config.get("auto_optimize_on_new_bar", False))
     if trigger_backtest or (is_new_bar and auto_opt):
-        bt_res = run_backtest_optimization(candles, atr_period, lookback, rsi_period, balance, tick_value, tick_size, min_lot, max_lot, lot_step, updated_config)
+        bt_res = run_backtest_optimization(candles, atr_period, lookback, balance, tick_value, tick_size, min_lot, max_lot, lot_step, updated_config)
         if bt_res:
-            updated_config["rsi_overbought"] = bt_res["rsi_overbought"]
-            updated_config["rsi_oversold"] = bt_res["rsi_oversold"]
+            updated_config["regression_period"] = bt_res["regression_period"]
+            updated_config["channel_dev_multiplier"] = bt_res["channel_dev_multiplier"]
             updated_config["tp_multiplier"] = bt_res["tp_multiplier"]
             updated_config["sl_multiplier"] = bt_res["sl_multiplier"]
-            updated_config["extreme_oversold"] = bt_res["extreme_oversold"]
-            updated_config["extreme_overbought"] = bt_res["extreme_overbought"]
             
             # Recalculate parameters since config was optimized
             atr_threshold = float(updated_config.get("atr_threshold", 80.0))
@@ -570,55 +601,65 @@ def process_strategy(data, config, add_log_fn):
     
     atr = calculate_atr(df['high'], df['low'], df['close'], atr_period)
     norm_atr = calculate_normalized_atr(atr, lookback)
-    rsi = calculate_rsi(df['close'], rsi_period)
     
-    rsi_curr = rsi.iloc[-2]
-    rsi_prev = rsi.iloc[-3]
+    reg_period = int(updated_config.get("regression_period", 50))
+    dev_mult = float(updated_config.get("channel_dev_multiplier", 2.0))
+    
+    center, upper, lower, slope = calculate_regression_channel(df['close'], reg_period, dev_mult)
+    
+    center_curr = center.iloc[-2]
+    upper_curr = upper.iloc[-2]
+    lower_curr = lower.iloc[-2]
+    slope_curr = slope.iloc[-2]
+    
     current_atr = atr.iloc[-2]
     current_norm_atr = norm_atr.iloc[-2]
     
-    cfg_ob = float(updated_config.get("rsi_overbought", 70.0))
-    cfg_os = float(updated_config.get("rsi_oversold", 30.0))
     cfg_tp_mult = float(updated_config.get("tp_multiplier", 1.0))
     cfg_sl_mult = float(updated_config.get("sl_multiplier", 2.0))
-    cfg_ex_ob = float(updated_config.get("extreme_overbought", 85.0))
-    cfg_ex_os = float(updated_config.get("extreme_oversold", 15.0))
+    use_center_exit = bool(updated_config.get("use_center_exit", True))
+    use_opp_exit = bool(updated_config.get("use_opposite_channel_exit", True))
     
-    cross_ob = (rsi_prev >= cfg_ob and rsi_curr < cfg_ob)
-    cross_os = (rsi_prev <= cfg_os and rsi_curr > cfg_os)
+    close_curr = df['close'].iloc[-2]
+    high_curr = df['high'].iloc[-2]
+    low_curr = df['low'].iloc[-2]
+    
+    buy_signal = (slope_curr > 0) and (low_curr <= lower_curr)
+    sell_signal = (slope_curr < 0) and (high_curr >= upper_curr)
     
     current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if is_new_bar:
-        add_log_fn(f"Calculations - [{symbol} {timeframe}] RSI: {rsi_curr:.2f} (prev: {rsi_prev:.2f}) | NormATR: {current_norm_atr:.1f}% | ATR: {current_atr:.5f}")
+        add_log_fn(f"Calculations - [{symbol} {timeframe}] Slope: {slope_curr:.6f} | Center: {center_curr:.2f} | Upper: {upper_curr:.2f} | Lower: {lower_curr:.2f} | NormATR: {current_norm_atr:.1f}%")
  
     signal_text = "NONE"
     if current_norm_atr < atr_threshold:
-        if cross_ob:
+        if sell_signal:
             signal_text = "SELL SIGNAL"
-        elif cross_os:
+        elif buy_signal:
             signal_text = "BUY SIGNAL"
-        elif rsi_curr > cfg_ob:
-            signal_text = "WAIT CROSSDOWN (OB)"
-        elif rsi_curr < cfg_os:
-            signal_text = "WAIT CROSSUP (OS)"
+        elif slope_curr > 0:
+            signal_text = "WAIT REBOUND BUY"
+        elif slope_curr < 0:
+            signal_text = "WAIT REBOUND SELL"
         else:
-            signal_text = "WAIT RSI"
+            signal_text = "WAIT SLOPE"
     else:
         signal_text = "NO TRADE (ATR high)"
 
-    display_line1 = f"Active Config — RSI OB/OS: {cfg_ob:.1f} / {cfg_os:.1f} | Extreme: {cfg_ex_ob:.1f} / {cfg_ex_os:.1f}"
+    display_line1 = f"Active Config — Reg Period: {reg_period} | Dev Mult: {dev_mult:.2f}"
     display_line2 = f"Active Config — TP Multiplier: {cfg_tp_mult:.1f} | SL Multiplier: {cfg_sl_mult:.1f}"
 
     res_dict = {
         "norm_atr": float(current_norm_atr),
-        "rsi": float(rsi_curr),
+        "center_val": float(center_curr) if not np.isnan(center_curr) else 0.0,
+        "upper_val": float(upper_curr) if not np.isnan(upper_curr) else 0.0,
+        "lower_val": float(lower_curr) if not np.isnan(lower_curr) else 0.0,
+        "slope": float(slope_curr) if not np.isnan(slope_curr) else 0.0,
         "signal_text": signal_text,
-        "rsi_overbought": cfg_ob,
-        "rsi_oversold": cfg_os,
+        "regression_period": reg_period,
+        "channel_dev_multiplier": dev_mult,
         "tp_multiplier": cfg_tp_mult,
         "sl_multiplier": cfg_sl_mult,
-        "extreme_oversold": cfg_ex_os,
-        "extreme_overbought": cfg_ex_ob,
         "update_time": current_time_str,
         "display_line1": display_line1,
         "display_line2": display_line2
@@ -629,8 +670,8 @@ def process_strategy(data, config, add_log_fn):
         res_dict["bt_win_rate"] = bt_res["win_rate"]
         res_dict["bt_total_profit"] = bt_res["best_profit"]
         res_dict["bt_max_drawdown"] = bt_res["max_drawdown"]
-        res_dict["opt_ob"] = bt_res["rsi_overbought"]
-        res_dict["opt_os"] = bt_res["rsi_oversold"]
+        res_dict["opt_period"] = bt_res["regression_period"]
+        res_dict["opt_dev"] = bt_res["channel_dev_multiplier"]
         res_dict["opt_tp"] = bt_res["tp_multiplier"]
         res_dict["opt_sl"] = bt_res["sl_multiplier"]
 
@@ -661,29 +702,24 @@ def process_strategy(data, config, add_log_fn):
 
             # 2. Standard/Indicator Exits (Only checked on new bar)
             if is_new_bar:
-                rsi_neutral = False
-                if bool(updated_config.get("use_rsi_neutral_exit", False)):
-                    neutral_line = float(updated_config.get("rsi_neutral", 50.0))
-                    if pos_type == "BUY" and rsi_curr > neutral_line:
-                        rsi_neutral = True
-                    elif pos_type == "SELL" and rsi_curr < neutral_line:
-                        rsi_neutral = True
+                center_exit = False
+                if use_center_exit:
+                    if pos_type == "BUY" and close_curr >= center_curr:
+                        center_exit = True
+                    elif pos_type == "SELL" and close_curr <= center_curr:
+                        center_exit = True
+
+                opp_channel_exit = False
+                if use_opp_exit:
+                    if pos_type == "BUY" and close_curr >= upper_curr:
+                        opp_channel_exit = True
+                    elif pos_type == "SELL" and close_curr <= lower_curr:
+                        opp_channel_exit = True
 
                 atr_spike = bool(updated_config.get("use_atr_spike_exit", True)) and (current_norm_atr >= atr_threshold * 1.5)
 
-                extreme_exit = False
-                if bool(updated_config.get("use_extreme_rsi_exit", True)) and profit > 0:
-                    if pos_type == "SELL":
-                        cross_up_ex_os = (rsi_prev < cfg_ex_os and rsi_curr > cfg_ex_os)
-                        if cross_up_ex_os:
-                            extreme_exit = True
-                    elif pos_type == "BUY":
-                        cross_down_ex_ob = (rsi_prev > cfg_ex_ob and rsi_curr < cfg_ex_ob)
-                        if cross_down_ex_ob:
-                            extreme_exit = True
-
-                if rsi_neutral or atr_spike or extreme_exit:
-                    reason = "RSI Neutral" if rsi_neutral else ("ATR Spike" if atr_spike else "Extreme RSI Crossover")
+                if center_exit or opp_channel_exit or atr_spike:
+                    reason = "Center Line Exit" if center_exit else ("Opposite Channel Exit" if opp_channel_exit else "ATR Spike")
                     action_dict = {
                         "action": "CLOSE",
                         "ticket": ticket,
@@ -694,7 +730,7 @@ def process_strategy(data, config, add_log_fn):
         # 3. Entries: Checked ONLY on new bar
         if is_new_bar:
             if current_norm_atr < atr_threshold:
-                if cross_ob:
+                if sell_signal:
                     sl_dist = current_atr * cfg_sl_mult
                     lot_size = calculate_lot_size(balance, risk_percent, sl_dist, tick_value, tick_size, min_lot, max_lot, lot_step)
                     action_dict = {
@@ -703,9 +739,9 @@ def process_strategy(data, config, add_log_fn):
                         "tp_multiplier": cfg_tp_mult,
                         "sl_multiplier": cfg_sl_mult,
                         "lot": round(lot_size, 2),
-                        "reason": "RSI crossed down from Overbought"
+                        "reason": "Price touched Upper Channel (Resistance) in Downtrend"
                     }
-                elif cross_os:
+                elif buy_signal:
                     sl_dist = current_atr * cfg_sl_mult
                     lot_size = calculate_lot_size(balance, risk_percent, sl_dist, tick_value, tick_size, min_lot, max_lot, lot_step)
                     action_dict = {
@@ -714,14 +750,14 @@ def process_strategy(data, config, add_log_fn):
                         "tp_multiplier": cfg_tp_mult,
                         "sl_multiplier": cfg_sl_mult,
                         "lot": round(lot_size, 2),
-                        "reason": "RSI crossed up from Oversold"
+                        "reason": "Price touched Lower Channel (Support) in Uptrend"
                     }
 
     res_dict.update(action_dict)
     
     # Customize HUD lines for better feedback
     if res_dict.get("action") == "NONE":
-        res_dict["display_line1"] = f"RSI: {rsi_curr:.2f} | NormATR: {current_norm_atr:.1f}%"
+        res_dict["display_line1"] = f"Slope: {slope_curr:.6f} | Center: {center_curr:.2f}"
         if len(symbol_positions) > 0:
             p = symbol_positions[0]
             res_dict["display_line2"] = f"Holding {p.get('type')} #{p.get('ticket')} | Profit: ${p.get('profit', 0.0):.2f}"
@@ -733,7 +769,10 @@ def process_strategy(data, config, add_log_fn):
     
     # UI live metrics list to render dynamically
     live_metrics = {
-        "RSI (7)": f"{rsi_curr:.2f}",
+        "Slope": f"{slope_curr:.6f}",
+        "Center": f"{center_curr:.2f}",
+        "Upper": f"{upper_curr:.2f}",
+        "Lower": f"{lower_curr:.2f}",
         "NormATR": f"{current_norm_atr:.1f}%"
     }
     

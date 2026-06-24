@@ -24,6 +24,14 @@
         "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/yum-hua-1.py"
     },
     {
+        "filename": "yum-hua-2.py",
+        "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/yum-hua-2.py"
+    },
+    {
+        "filename": "yum-hua-3.py",
+        "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/yum-hua-3.py"
+    },
+    {
         "filename": "rapid_fire_scalper.py",
         "url": "https://raw.githubusercontent.com/Maimeeloma/Strategies/main/extensions/rapid_fire_scalper.py"
     },
