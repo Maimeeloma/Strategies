@@ -7,6 +7,7 @@ Rapid Fire RSI Grid Scalper
 """
 import pandas as pd
 import numpy as np
+from datetime import datetime
 
 STRATEGY_NAME = "Rapid Fire Scalper"
 
@@ -53,6 +54,8 @@ def process_strategy(data, config, add_log_fn):
     candles = data.get("candles", [])
     positions = data.get("positions", [])
     symbol = data.get("symbol", "UNKNOWN")
+    timeframe = data.get("timeframe", "M5")
+    is_new_bar = bool(data.get("is_new_bar", False))
     trigger_backtest = bool(data.get("trigger_backtest", False))
     
     rsi_period = int(config.get("rsi_period", 7))
@@ -90,11 +93,20 @@ def process_strategy(data, config, add_log_fn):
     # Analyze open positions for this symbol
     my_positions = [p for p in positions if p.get("symbol") == symbol]
     
+    current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    signal_text = "HOLDING" if len(my_positions) > 0 else "WAITING"
+
     res_dict = {
-        "action": "NONE",
-        "display_line1": f"RSI({rsi_period}): {curr_rsi:.1f} | ATR: {curr_atr:.5f}",
-        "display_line2": f"Layers: {len(my_positions)}/{max_layers}"
+        "rsi": float(curr_rsi),
+        "atr": float(curr_atr),
+        "signal_text": signal_text,
+        "rsi_ob": rsi_ob,
+        "rsi_os": rsi_os,
+        "tp_multiplier": tp_mult,
+        "sl_multiplier": sl_mult,
+        "update_time": current_time_str,
     }
+    action_dict = {"action": "NONE"}
     
     updated_config = config.copy()
     bt_res = None
@@ -118,46 +130,39 @@ def process_strategy(data, config, add_log_fn):
                 
         if close_all:
             add_log_fn(f"Grid profitable! Total Profit: ${total_profit:.2f}. Closing all layers.")
-            res_dict = {
+            action_dict = {
                 "action": "CLOSE_ALL",
-                "reason": "Grid Profitable Exit",
-                "display_line1": "Exit Triggered",
-                "display_line2": f"Profit: ${total_profit:.2f}"
+                "reason": "Grid Profitable Exit"
             }
-            return res_dict, updated_config, {"RSI": f"{curr_rsi:.1f}", "Layers": str(len(my_positions)), "Profit": f"${total_profit:.2f}"}, None
-            
-        # 2. Check Layer Addition (Grid)
-        if len(my_positions) < max_layers:
-            if pos_type == "BUY":
-                lowest_entry = min(p.get("price_open", curr_close) for p in my_positions)
-                dist = lowest_entry - curr_close
-                if dist >= grid_step * curr_atr and curr_rsi < rsi_os:
-                    add_log_fn(f"Adding Layer {len(my_positions)+1} BUY. Dist: {dist:.5f}")
-                    lot = calculate_lot_size(balance, risk_pct, curr_atr * sl_mult, tick_value, tick_size, min_lot, max_lot, lot_step)
-                    res_dict = {
-                        "action": "BUY",
-                        "lot": lot,
-                        "tp_multiplier": tp_mult,
-                        "sl_multiplier": sl_mult,
-                        "reason": f"Grid Layer {len(my_positions)+1}",
-                        "display_line1": f"Adding BUY Layer {len(my_positions)+1}",
-                        "display_line2": f"Dist from last: {dist:.5f}"
-                    }
-            elif pos_type == "SELL":
-                highest_entry = max(p.get("price_open", curr_close) for p in my_positions)
-                dist = curr_close - highest_entry
-                if dist >= grid_step * curr_atr and curr_rsi > rsi_ob:
-                    add_log_fn(f"Adding Layer {len(my_positions)+1} SELL. Dist: {dist:.5f}")
-                    lot = calculate_lot_size(balance, risk_pct, curr_atr * sl_mult, tick_value, tick_size, min_lot, max_lot, lot_step)
-                    res_dict = {
-                        "action": "SELL",
-                        "lot": lot,
-                        "tp_multiplier": tp_mult,
-                        "sl_multiplier": sl_mult,
-                        "reason": f"Grid Layer {len(my_positions)+1}",
-                        "display_line1": f"Adding SELL Layer {len(my_positions)+1}",
-                        "display_line2": f"Dist from last: {dist:.5f}"
-                    }
+        else:
+            # 2. Check Layer Addition (Grid)
+            if len(my_positions) < max_layers:
+                if pos_type == "BUY":
+                    lowest_entry = min(p.get("price_open", curr_close) for p in my_positions)
+                    dist = lowest_entry - curr_close
+                    if dist >= grid_step * curr_atr and curr_rsi < rsi_os:
+                        add_log_fn(f"Adding Layer {len(my_positions)+1} BUY. Dist: {dist:.5f}")
+                        lot = calculate_lot_size(balance, risk_pct, curr_atr * sl_mult, tick_value, tick_size, min_lot, max_lot, lot_step)
+                        action_dict = {
+                            "action": "BUY",
+                            "lot": lot,
+                            "tp_multiplier": tp_mult,
+                            "sl_multiplier": sl_mult,
+                            "reason": f"Grid Layer {len(my_positions)+1}"
+                        }
+                elif pos_type == "SELL":
+                    highest_entry = max(p.get("price_open", curr_close) for p in my_positions)
+                    dist = curr_close - highest_entry
+                    if dist >= grid_step * curr_atr and curr_rsi > rsi_ob:
+                        add_log_fn(f"Adding Layer {len(my_positions)+1} SELL. Dist: {dist:.5f}")
+                        lot = calculate_lot_size(balance, risk_pct, curr_atr * sl_mult, tick_value, tick_size, min_lot, max_lot, lot_step)
+                        action_dict = {
+                            "action": "SELL",
+                            "lot": lot,
+                            "tp_multiplier": tp_mult,
+                            "sl_multiplier": sl_mult,
+                            "reason": f"Grid Layer {len(my_positions)+1}"
+                        }
                     
     else:
         # No positions, check initial entry
@@ -167,33 +172,43 @@ def process_strategy(data, config, add_log_fn):
         if cross_up_os:
             add_log_fn("Initial BUY Signal Triggered.")
             lot = calculate_lot_size(balance, risk_pct, curr_atr * sl_mult, tick_value, tick_size, min_lot, max_lot, lot_step)
-            res_dict = {
+            action_dict = {
                 "action": "BUY",
                 "lot": lot,
                 "tp_multiplier": tp_mult,
                 "sl_multiplier": sl_mult,
-                "reason": "RSI Initial BUY",
-                "display_line1": "Signal: BUY",
-                "display_line2": f"RSI Crossed {rsi_os}"
+                "reason": "RSI Initial BUY"
             }
         elif cross_down_ob:
             add_log_fn("Initial SELL Signal Triggered.")
             lot = calculate_lot_size(balance, risk_pct, curr_atr * sl_mult, tick_value, tick_size, min_lot, max_lot, lot_step)
-            res_dict = {
+            action_dict = {
                 "action": "SELL",
                 "lot": lot,
                 "tp_multiplier": tp_mult,
                 "sl_multiplier": sl_mult,
-                "reason": "RSI Initial SELL",
-                "display_line1": "Signal: SELL",
-                "display_line2": f"RSI Crossed {rsi_ob}"
+                "reason": "RSI Initial SELL"
             }
 
+    res_dict.update(action_dict)
+    
+    if res_dict.get("action") == "NONE":
+        res_dict["display_line1"] = f"RSI({rsi_period}): {curr_rsi:.1f} | ATR: {curr_atr:.5f}"
+        res_dict["display_line2"] = f"Layers: {len(my_positions)}/{max_layers}"
+    else:
+        res_dict["display_line1"] = f"Action: {res_dict.get('action')}"
+        res_dict["display_line2"] = f"Reason: {res_dict.get('reason')}"
+
+    # UI live metrics list to render dynamically
     live_metrics = {
         f"RSI ({rsi_period})": f"{curr_rsi:.1f}",
         "ATR": f"{curr_atr:.5f}",
         "Active Layers": str(len(my_positions)),
         "Total Profit": f"${sum(p.get('profit', 0) for p in my_positions):.2f}" if len(my_positions) > 0 else "$0.00"
     }
+
+    if is_new_bar:
+        profit_str = f"${sum(p.get('profit', 0) for p in my_positions):.2f}"
+        add_log_fn(f"[{symbol} {timeframe}] RSI={curr_rsi:.1f} ATR={curr_atr:.5f} Layers={len(my_positions)}/{max_layers} Profit={profit_str}")
 
     return res_dict, updated_config, live_metrics, bt_res

@@ -9,6 +9,7 @@ Teaser Scout Strategy (กลยุทธ์หมาหยอกไก่)
 """
 import pandas as pd
 import numpy as np
+from datetime import datetime
 
 STRATEGY_NAME = "Teaser Scout"
 
@@ -55,6 +56,8 @@ def process_strategy(data, config, add_log_fn):
     candles = data.get("candles", [])
     positions = data.get("positions", [])
     symbol = data.get("symbol", "UNKNOWN")
+    timeframe = data.get("timeframe", "M5")
+    is_new_bar = bool(data.get("is_new_bar", False))
     trigger_backtest = bool(data.get("trigger_backtest", False))
     
     rsi_period = int(config.get("rsi_period", 7))
@@ -91,11 +94,20 @@ def process_strategy(data, config, add_log_fn):
     
     my_positions = [p for p in positions if p.get("symbol") == symbol]
     
+    current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    state_str = "Sniper" if len(my_positions) >= 2 else ("Scout" if len(my_positions) == 1 else "Waiting")
+
     res_dict = {
-        "action": "NONE",
-        "display_line1": f"RSI: {curr_rsi:.1f} | ATR: {curr_atr:.5f}",
-        "display_line2": f"Status: Waiting for signal..."
+        "rsi": float(curr_rsi),
+        "atr": float(curr_atr),
+        "signal_text": state_str,
+        "rsi_ob": rsi_ob,
+        "rsi_os": rsi_os,
+        "scout_tp_mult": scout_tp,
+        "scout_sl_mult": scout_sl,
+        "update_time": current_time_str,
     }
+    action_dict = {"action": "NONE"}
     
     updated_config = config.copy()
     bt_res = None
@@ -113,26 +125,22 @@ def process_strategy(data, config, add_log_fn):
         if cross_up_os:
             add_log_fn("Deploying Scout BUY")
             lot = calculate_lot_size(balance, risk_pct, curr_atr * scout_sl, tick_value, tick_size, min_lot, max_lot, lot_step)
-            res_dict = {
+            action_dict = {
                 "action": "BUY",
                 "lot": lot,
                 "tp_multiplier": scout_tp,
                 "sl_multiplier": scout_sl,
-                "reason": "Scout BUY",
-                "display_line1": "Deploying Scout BUY",
-                "display_line2": f"TP: {scout_tp} ATR"
+                "reason": "Scout BUY"
             }
         elif cross_down_ob:
             add_log_fn("Deploying Scout SELL")
             lot = calculate_lot_size(balance, risk_pct, curr_atr * scout_sl, tick_value, tick_size, min_lot, max_lot, lot_step)
-            res_dict = {
+            action_dict = {
                 "action": "SELL",
                 "lot": lot,
                 "tp_multiplier": scout_tp,
                 "sl_multiplier": scout_sl,
-                "reason": "Scout SELL",
-                "display_line1": "Deploying Scout SELL",
-                "display_line2": f"TP: {scout_tp} ATR"
+                "reason": "Scout SELL"
             }
 
     # ── State 1: Scout is Active (Monitor & Learn) ───────────────────────
@@ -145,11 +153,9 @@ def process_strategy(data, config, add_log_fn):
         
         if pos_type == "BUY":
             dist = pos.get("price_open", curr_close) - curr_close
-            res_dict["display_line2"] = f"Scout Dist: {dist:.5f}"
             
             # ถ้าราคาลากลงลึกกว่า sniper_dist
             if dist >= sniper_dist * curr_atr:
-                res_dict["display_line2"] = f"Awaiting Sniper Confirm..."
                 # รอให้กราฟเริ่มโค้งกลับ (RSI หักหัวขึ้น) เพื่อยิง Sniper
                 if curr_rsi > prev_rsi and curr_rsi < 50.0:
                     add_log_fn(f"Scout dragged by {dist:.5f}. Deploying Sniper BUY!")
@@ -158,58 +164,64 @@ def process_strategy(data, config, add_log_fn):
                     raw_sniper = base_lot * sniper_mult
                     sniper_lot = max(min_lot, min(max_lot, round(raw_sniper / lot_step) * lot_step))
                     
-                    res_dict = {
+                    action_dict = {
                         "action": "BUY",
                         "lot": sniper_lot,
                         "tp_multiplier": scout_tp * 2, # กว้างหน่อยเพราะเดี๋ยวเราจะ Close All ทิ้งเอง
                         "sl_multiplier": scout_sl,
-                        "reason": "Sniper Recovery BUY",
-                        "display_line1": "Deploying Sniper BUY!",
-                        "display_line2": f"Lot: {sniper_lot}"
+                        "reason": "Sniper Recovery BUY"
                     }
                     
         elif pos_type == "SELL":
             dist = curr_close - pos.get("price_open", curr_close)
-            res_dict["display_line2"] = f"Scout Dist: {dist:.5f}"
             
             if dist >= sniper_dist * curr_atr:
-                res_dict["display_line2"] = f"Awaiting Sniper Confirm..."
                 if curr_rsi < prev_rsi and curr_rsi > 50.0:
                     add_log_fn(f"Scout dragged by {dist:.5f}. Deploying Sniper SELL!")
                     base_lot = pos.get("lot", min_lot)
                     raw_sniper = base_lot * sniper_mult
                     sniper_lot = max(min_lot, min(max_lot, round(raw_sniper / lot_step) * lot_step))
                     
-                    res_dict = {
+                    action_dict = {
                         "action": "SELL",
                         "lot": sniper_lot,
                         "tp_multiplier": scout_tp * 2,
                         "sl_multiplier": scout_sl,
-                        "reason": "Sniper Recovery SELL",
-                        "display_line1": "Deploying Sniper SELL!",
-                        "display_line2": f"Lot: {sniper_lot}"
+                        "reason": "Sniper Recovery SELL"
                     }
 
     # ── State 2: Sniper Deployed (Wait for Recovery) ─────────────────────
     elif len(my_positions) >= 2:
-        res_dict["display_line1"] = "Sniper Active"
-        res_dict["display_line2"] = f"Total Profit: ${total_profit:.2f}"
-        
         # ปิดรวบทุกไม้ (Scout + Sniper) ทันทีที่หลุดดอย
         if total_profit > 0:
             add_log_fn(f"Sniper Recovery Successful! Profit: ${total_profit:.2f}")
-            res_dict = {
+            action_dict = {
                 "action": "CLOSE_ALL",
-                "reason": "Sniper Recovery Exit",
-                "display_line1": "Target Hit",
-                "display_line2": f"Recovered: ${total_profit:.2f}"
+                "reason": "Sniper Recovery Exit"
             }
 
+    res_dict.update(action_dict)
+
+    if res_dict.get("action") == "NONE":
+        res_dict["display_line1"] = f"RSI: {curr_rsi:.1f} | ATR: {curr_atr:.5f}"
+        if len(my_positions) > 0:
+            res_dict["display_line2"] = f"State: {state_str} | Profit: ${total_profit:.2f}"
+        else:
+            res_dict["display_line2"] = f"Status: Waiting for signal..."
+    else:
+        res_dict["display_line1"] = f"Action: {res_dict.get('action')}"
+        res_dict["display_line2"] = f"Reason: {res_dict.get('reason')}"
+
+    # UI live metrics list to render dynamically
     live_metrics = {
         "Strategy State": "Sniper" if len(my_positions) >= 2 else ("Scout" if len(my_positions) == 1 else "Waiting"),
         f"RSI ({rsi_period})": f"{curr_rsi:.1f}",
         "Active Layers": str(len(my_positions)),
         "Total Profit": f"${total_profit:.2f}"
     }
+
+    if is_new_bar:
+        state_str = "Sniper" if len(my_positions) >= 2 else ("Scout" if len(my_positions) == 1 else "Waiting")
+        add_log_fn(f"[{symbol} {timeframe}] State={state_str} RSI={curr_rsi:.1f} ATR={curr_atr:.5f} Layers={len(my_positions)} Profit=${total_profit:.2f}")
 
     return res_dict, updated_config, live_metrics, bt_res
