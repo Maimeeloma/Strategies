@@ -17,7 +17,8 @@ DEFAULT_CONFIG = {
     "use_opposite_channel_exit": True,
     "use_atr_spike_exit": True,
     "auto_optimize_on_new_bar": True,
-    "sideway_slope_threshold": 0.05
+    "sideway_slope_threshold": 0.05,
+    "max_orders": 1
 }
 
 # ==========================================
@@ -736,7 +737,8 @@ def process_strategy(data, config, add_log_fn):
     else:
         # 3. Entries: Checked ONLY on new bar
         if is_new_bar:
-            if current_norm_atr < atr_threshold:
+            max_orders = int(updated_config.get("max_orders", 1))
+            if current_norm_atr < atr_threshold and len(symbol_positions) < max_orders:
                 if sell_signal and not is_rising_rocket:
                     sl_dist = current_atr * cfg_sl_mult
                     lot_size = calculate_lot_size(balance, risk_percent, sl_dist, tick_value, tick_size, min_lot, max_lot, lot_step)
